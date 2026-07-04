@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Go (future)
+go/bin/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Agent prompts and planning docs (not for version control)
+.github/prompts/
