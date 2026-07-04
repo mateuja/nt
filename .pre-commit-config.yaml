@@ -1,0 +1,37 @@
+repos:
+  # Local hooks run against the locked dev environment in py/. Versions stay in
+  # sync with uv.lock, so local hooks and the CI `lint` job never drift apart.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --project py/ ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types: [python]
+        pass_filenames: true
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --project py/ ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: true
+        require_serial: true
+      - id: ty-check
+        name: ty check (py/ + tests/)
+        entry: uv run --project py/ ty check --project py .
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
