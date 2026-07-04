@@ -7,6 +7,13 @@ This repo is in the **pre-implementation planner state**: the scaffold is in pla
 - `docs/cli-contract.md`, `docs/daemon-protocol.md`, `docs/storage-format.md` are **binding contracts**. Both the Python (v1) and Go (future) implementations must satisfy them exactly. When code and a doc disagree, the doc wins; fix the code.
 - `DESIGN.md` is the high-level rationale. The `docs/*.md` specs are more precise where they overlap — prefer the specs.
 
+## Pull requests and merging
+
+- **Never merge a PR while any required CI check is failing, pending, or missing.** This is non-negotiable, even if the failure looks flaky or unrelated. Investigate and fix, or wait for the run to finish.
+- **Agents never run the merge command.** `gh pr merge` (squash) is run by the user manually. When a PR is ready and all required checks are green, print the exact command for the user and stop — do not execute it.
+- The `--admin` override on `gh pr merge` exists for human-only emergencies (e.g. bootstrapping the CI pipeline itself). Agents must never use `--admin`; suggest it to the user only if they explicitly ask how to bypass a protection rule.
+- `main` is protected: required status checks are `CI / Build`, `CI / Lint & typecheck`, `CI / Test (ubuntu-latest)`, and `CI / Test (macos-latest)` (`strict`, so the PR head must be up to date with `main`), and linear history is required (squash or rebase merges only). Never force-push to `main` or delete it.
+
 ## Intended layout
 
 ```
