@@ -27,8 +27,21 @@ NT_BIN=./go/bin/nt pytest                  # same tests against the Go binary la
 ```
 
 - Python target: **3.14**. Build backend: hatchling.
-- **Strict stdlib only.** No `click`, `prompt-toolkit`, `rich`, etc. Every external dep is one more thing to re-port to Go.
+- **Strict stdlib only.** No `click`, `prompt-toolkit`, `rich`, etc. Every external dep is one more thing to re-port to Go. (Dev tooling — ruff, ty, pre-commit — does not count; it never ships.)
 - `py/tests/` holds Python-internal unit tests (throwaway post-migration). Root `tests/` is implementation-agnostic and must survive unchanged against either binary.
+
+## Tooling commands
+
+Dev tooling lives in the `dev` dependency group of `py/pyproject.toml`; versions are pinned via `py/uv.lock`. Pre-commit hooks (`.pre-commit-config.yaml`) and the CI `lint` job both run from this same environment, so they never drift apart. Run these from the repo root:
+
+```
+cd py && uv sync && uv run pre-commit install   # one-time: enable git hooks
+uv run --project py/ ruff check                 # lint
+uv run --project py/ ruff format                # auto-format
+uv run --project py/ ty check --project py      # typecheck (hard CI gate)
+uv run --project py/ pre-commit run --all-files # ruff + format + ty + hygiene, exactly as CI
+uv run --project py/ pytest tests -q            # black-box CLI suite (same command CI runs)
+```
 
 ## Black-box test rules (root `tests/`)
 

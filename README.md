@@ -23,5 +23,11 @@ exactly. When code and a doc disagree, the doc wins.
 
 ```
 cd py && uv sync && uv run nt --version
-pytest        # from repo root
+cd .. && uv run --project py/ pytest tests -q
+```
+
+Contributors should also enable the git hooks once:
+
+```
+cd py && uv sync && uv run pre-commit install
 ```

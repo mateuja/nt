@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Sync dev environment
+        run: uv sync --project py
+
+      - name: Run pre-commit (ruff, format, ty, hygiene)
+        run: uv run --project py/ pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Sync dev environment
+        run: uv sync --project py
+
+      - name: Run black-box CLI tests
+        run: uv run --project py/ pytest tests -q
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Build wheel + sdist
+        run: uv build --project py --out-dir py/dist
+
+      - name: Verify wheel contents
+        run: |
+          uv run --project py/ python - <<'PY'
+          import glob, zipfile
+          wheels = glob.glob("py/dist/*.whl")
+          assert wheels, "no wheel produced"
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          assert any(p.endswith("nt/__init__.py") for p in names), "missing nt/__init__.py"
+          assert any(p.endswith("nt/__main__.py") for p in names), "missing nt/__main__.py"
+          print(f"OK: {wheels[0]}")
+          PY
