@@ -25,6 +25,39 @@ repos:
         pass_filenames: false
         require_serial: true
 
+  # Go linting. golangci-lint is the single source of truth: the same
+  # config at go/.golangci.yml is consumed by both this hook and the CI
+  # `lint` job, so they never drift apart. It runs from within go/
+  # because there is no go.mod at the repo root (golangci-lint needs to
+  # locate the main module). `language: golang` makes pre-commit
+  # bootstrap golangci-lint itself, so Python-only contributors without
+  # a local Go install are unaffected (the `files` filter excludes
+  # them).
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint (go/)
+        entry: bash -c 'cd go && golangci-lint run --config=.golangci.yml .'
+        language: golang
+        pass_filenames: false
+        require_serial: true
+        files: ^go/
+
+  # Local Go format check (parallel to ruff format --check on the Python
+  # side). golangci-lint reports gofmt problems but does not enforce a
+  # zero-diff gate on its own; this hook fails the commit if any .go
+  # file is not gofmt-clean.
+  - repo: local
+    hooks:
+      - id: gofmt-check
+        name: gofmt -l (go/)
+        entry: bash -c 'out=$(gofmt -l go); if [ -n "$out" ]; then echo "$out"; exit 1; fi' --
+        language: system
+        files: ^go/.*\.go$
+        pass_filenames: false
+        require_serial: true
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

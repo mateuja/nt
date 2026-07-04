@@ -12,13 +12,13 @@ This repo is in the **pre-implementation planner state**: the scaffold is in pla
 - **Never merge a PR while any required CI check is failing, pending, or missing.** This is non-negotiable, even if the failure looks flaky or unrelated. Investigate and fix, or wait for the run to finish.
 - **Agents never run the merge command.** `gh pr merge` (squash) is run by the user manually. When a PR is ready and all required checks are green, print the exact command for the user and stop — do not execute it.
 - The `--admin` override on `gh pr merge` exists for human-only emergencies (e.g. bootstrapping the CI pipeline itself). Agents must never use `--admin`; suggest it to the user only if they explicitly ask how to bypass a protection rule.
-- `main` is protected: required status checks are `CI / Build`, `CI / Lint & typecheck`, `CI / Test (ubuntu-latest)`, and `CI / Test (macos-latest)` (`strict`, so the PR head must be up to date with `main`), and linear history is required (squash or rebase merges only). Never force-push to `main` or delete it.
+- `main` is protected: required status checks are `CI / Build`, `CI / Lint & typecheck`, `CI / Test (ubuntu-latest, py)`, `CI / Test (ubuntu-latest, go)`, `CI / Test (macos-latest, py)`, and `CI / Test (macos-latest, go)` (`strict`, so the PR head must be up to date with `main`), and linear history is required (squash or rebase merges only). Never force-push to `main` or delete it. The `CI / Unit tests (linux)` job is informational (non-required) for now; promote it to required once `py/tests/` and Go unit tests are meaningful.
 
 ## Intended layout
 
 ```
 py/      Python v1 (uv-managed, src/ layout, package `nt`)
-go/      future Go rewrite (empty for now)
+go/      Go rewrite (main package at go/, builds to go/bin/nt; satisfies the same docs/ contracts)
 tests/   root, black-box CLI tests (pytest, subprocess-driven)
 docs/    binding contracts
 ```
@@ -33,9 +33,16 @@ pytest                                     # from repo root; NT_BIN defaults to 
 NT_BIN=./go/bin/nt pytest                  # same tests against the Go binary later
 ```
 
+```
+go -C go build -o bin/nt .                 # build the Go binary to go/bin/nt
+NT_BIN=./go/bin/nt uv run --project py/ pytest tests -q   # black-box suite against the Go binary
+go -C go test ./...                        # Go unit tests (linux-only in CI)
+```
+
 - Python target: **3.14**. Build backend: hatchling.
 - **Strict stdlib only.** No `click`, `prompt-toolkit`, `rich`, etc. Every external dep is one more thing to re-port to Go. (Dev tooling — ruff, ty, pre-commit — does not count; it never ships.)
 - `py/tests/` holds Python-internal unit tests (throwaway post-migration). Root `tests/` is implementation-agnostic and must survive unchanged against either binary.
+- **Dual-binary invariant:** the same root `tests/` suite must pass against **both** the Python and Go binaries on **every matrix OS** (ubuntu-latest and macos-latest). This is enforced by the CI `test` job's `os × binary` matrix. Python and Go unit tests run linux-only in the informational `CI / Unit tests (linux)` job. If the Go binary diverges from a contract, a black-box test fails — that is the intended regression gate, not a bug to work around.
 
 ## Tooling commands
 
@@ -46,8 +53,11 @@ cd py && uv sync && uv run pre-commit install   # one-time: enable git hooks
 uv run --project py/ ruff check                 # lint
 uv run --project py/ ruff format                # auto-format
 uv run --project py/ ty check --project py .   # typecheck py/ + tests/ (hard CI gate)
-uv run --project py/ pre-commit run --all-files # ruff + format + ty + hygiene, exactly as CI
+uv run --project py/ pre-commit run --all-files # ruff + format + ty + golangci-lint + hygiene, exactly as CI
 uv run --project py/ pytest tests -q            # black-box CLI suite (same command CI runs)
+go -C go build -o bin/nt .                       # build the Go binary
+NT_BIN=./go/bin/nt uv run --project py/ pytest tests -q   # black-box suite against the Go binary
+golangci-lint run --config=go/.golangci.yml .   # Go lint (run from go/, or `cd go && golangci-lint run`); config shared with pre-commit/CI
 ```
 
 ## Black-box test rules (root `tests/`)
