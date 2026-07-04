@@ -18,8 +18,8 @@ repos:
         pass_filenames: true
         require_serial: true
       - id: ty-check
-        name: ty check
-        entry: uv run --project py/ ty check --project py
+        name: ty check (py/ + tests/)
+        entry: uv run --project py/ ty check --project py .
         language: system
         types: [python]
         pass_filenames: false

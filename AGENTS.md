@@ -38,7 +38,7 @@ Dev tooling lives in the `dev` dependency group of `py/pyproject.toml`; versions
 cd py && uv sync && uv run pre-commit install   # one-time: enable git hooks
 uv run --project py/ ruff check                 # lint
 uv run --project py/ ruff format                # auto-format
-uv run --project py/ ty check --project py      # typecheck (hard CI gate)
+uv run --project py/ ty check --project py .   # typecheck py/ + tests/ (hard CI gate)
 uv run --project py/ pre-commit run --all-files # ruff + format + ty + hygiene, exactly as CI
 uv run --project py/ pytest tests -q            # black-box CLI suite (same command CI runs)
 ```
