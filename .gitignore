@@ -14,6 +14,3 @@ go/bin/
 .vscode/
 .idea/
 .DS_Store
-
-# Agent prompts and planning docs (not for version control)
-.github/prompts/

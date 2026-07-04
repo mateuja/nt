@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repo is in the **pre-implementation planner state**: only `DESIGN.md` and `docs/` exist; no `py/`, `go/`, or `tests/` yet. Implementation is planned in `.github/prompts/initial-commit.md` and `docs/scaffold.md` (those prompts are gitignored, not part of the tracked repo).
+This repo is in the **pre-implementation planner state**: the scaffold is in place (`py/`, `go/`, `tests/`) but no business logic is implemented yet — see `docs/` for the binding contracts each feature must satisfy.
 
 ## Source of truth
 
@@ -16,7 +16,7 @@ tests/   root, black-box CLI tests (pytest, subprocess-driven)
 docs/    binding contracts
 ```
 
-Module responsibilities are fixed by `docs/scaffold.md` (`cli.py`, `timeparse.py`, `storage.py`, `daemon.py`, `notify.py`, `protocol.py`, `display.py`, `fuzzy.py`). Don't invent different splits.
+Module responsibilities are fixed: `cli.py` (entry surface — arg parsing, time-parse calls, socket requests, output rendering), `timeparse.py` (pure time-string → UTC, no I/O), `storage.py` (atomic `tasks.json` read/write), `daemon.py` (socket server, in-memory timers, state transitions), `notify.py` (OS notification backends), `protocol.py` (request/response envelopes, no I/O), `display.py` (renders `nt ls` from daemon responses), `fuzzy.py` (TTY ref disambiguation menu — the only module that touches the terminal). Don't invent different splits.
 
 ## Developer commands (once scaffolded)
 
@@ -26,7 +26,7 @@ pytest                                     # from repo root; NT_BIN defaults to 
 NT_BIN=./go/bin/nt pytest                  # same tests against the Go binary later
 ```
 
-- Python target: **3.13**. Build backend: hatchling.
+- Python target: **3.14**. Build backend: hatchling.
 - **Strict stdlib only.** No `click`, `prompt-toolkit`, `rich`, etc. Every external dep is one more thing to re-port to Go.
 - `py/tests/` holds Python-internal unit tests (throwaway post-migration). Root `tests/` is implementation-agnostic and must survive unchanged against either binary.
 
@@ -51,14 +51,6 @@ NT_BIN=./go/bin/nt pytest                  # same tests against the Go binary la
 
 ## Gotchas
 
-- `.github/prompts/` is gitignored — those plans are conveniences, not tracked. Don't treat them as authoritative contracts; the tracked `docs/` are.
 - The daemon re-arms all timers from `tasks.json` on startup (recovery after downtime/crash). In-memory state is reconstructable from the file — never assume a separate daemon-state file.
 - `ack` of a repeating task re-arms the next reminder `repeat_interval_secs` from now; the confirmation line does **not** mention this separately.
 - Empty `nt ls` sections are **omitted entirely** (no header printed). If all sections empty, print exactly `no active tasks.`.
-
-## Planning artifacts
-
-When you produce a multi-step plan or work breakdown for this repo, save it as
-`.github/prompts/<feature>.md` (see the existing `initial-commit.md` and
-`scaffold.md` for format). The directory is gitignored on purpose — plans are
-conveniences, not tracked contracts.
