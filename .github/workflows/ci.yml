@@ -26,15 +26,16 @@ jobs:
       - name: Sync dev environment
         run: uv sync --project py
 
-      - name: Run pre-commit (ruff, format, ty, hygiene)
+      - name: Run pre-commit (ruff, format, ty, hygiene, golangci-lint)
         run: uv run --project py/ pre-commit run --all-files --show-diff-on-failure
 
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, ${{ matrix.binary }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        binary: [py, go]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +49,46 @@ jobs:
       - name: Sync dev environment
         run: uv sync --project py
 
+      - name: Set up Go (go binary)
+        if: matrix.binary == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+
+      - name: Build Go binary
+        if: matrix.binary == 'go'
+        run: go -C go build -o bin/nt .
+
       - name: Run black-box CLI tests
+        env:
+          NT_BIN: ${{ matrix.binary == 'go' && './go/bin/nt' || '' }}
         run: uv run --project py/ pytest tests -q
+
+  unit:
+    name: Unit tests (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+
+      - name: Go unit tests
+        run: go -C go test ./...
+
+      - name: Python unit tests
+        if: hashFiles('py/tests/**.py') != ''
+        run: uv run --project py/ pytest py/tests -q
 
   build:
     name: Build
