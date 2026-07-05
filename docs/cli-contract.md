@@ -12,27 +12,21 @@ Equivalent to `nt ls`. See below.
 
 ### `nt ls`
 
-Lists not-done tasks grouped into three sections, in this fixed order:
+Lists active tasks in a single continuous list, sorted by `next_fire_at` ascending (soonest-fire first). There are no sections, no stored states, and no `[STALE]` markers; sort position is the only thing that distinguishes an urgent task from an upcoming one.
 
-1. `OVERDUE` — tasks whose state is `overdue`. Sorted by `last_fired_at` ascending (oldest-fired first).
-2. `PENDING` — tasks whose state is `pending`. Sorted by `next_fire_at` ascending (soonest-fire first).
-3. `ACKED, NOT DONE` — tasks whose state is `ackd`. Sorted by `ackd_at` descending (most recently acked first).
-
-Empty sections are omitted entirely (no header printed for a section with no tasks in it).
-
-If all sections are empty (no active tasks), print exactly:
+If there are no active tasks, print exactly:
 
 ```
 no active tasks.
 ```
 
-### `nt ls --overdue` / `--pending` / `--ackd`
+There are no `--overdue` / `--pending` / `--ackd` filter flags. Filtering is deferred to a post-v1 milestone if it is needed at all.
 
-Filters the listing to a subset of sections. Multiple flags combine as a union; sections still appear in the canonical order (OVERDUE, PENDING, ACKED). If no flag is given, all three sections are eligible to appear (subject to omission-when-empty rule).
+### `nt <when> ["every <interval>"] "<title>"`
 
-### `nt <when> "<title>"`
+Creates a task whose alarm fires at `<when>` and then re-arms on a cadence. `every <interval>` is optional; when omitted, the cadence defaults to 1h (`3600` seconds) for v1. Configurability of the default cadence is a post-v1 milestone (the `--config` reserved flag is its eventual surface).
 
-Creates a task with a one-shot alarm at the given time. Output to stdout, one line:
+Output to stdout, one line:
 
 ```
 created 'Task x' [a3f2] fires in 30m
@@ -44,23 +38,25 @@ For absolute times that land >24h away, the relative part uses absolute form:
 created 'Task x' [a3f2] fires 10 Apr 10:55
 ```
 
-### `nt <when> every <interval> "<title>"`
+Because every task has a cadence, the output line does not separately announce "repeats every Nm" — that the alarm re-arms is the model's default behavior, not a special mode.
 
-Creates a task with a repeating alarm. Output:
+### `nt defer <ref> <when> ["every <interval>"]`
 
-```
-created 'Task x' [a3f2] fires in 30m, repeats every 10m until acked
-```
+Reschedules the referenced task: sets its `next_fire_at` to `<when>`, and optionally replaces its cadence. `every <interval>`, if present, replaces `cadence_secs` for the task; if omitted, the existing cadence is preserved.
 
-### `nt ack <ref>`
-
-Silences the alarm for the referenced task. Output:
+Output:
 
 ```
-acked 'Task x' [a3f2]
+deferred 'Task x' [a3f2] fires in 30m
 ```
 
-For repeating tasks, acking also re-arms the next reminder `repeat_interval_secs` from now; this is not separately announced in the output.
+For absolute times that land >24h away:
+
+```
+deferred 'Task x' [a3f2] fires 10 Apr 10:55
+```
+
+`defer` is the only way to silence a fired alarm without removing the task: it pushes `next_fire_at` into the future, so the task resumes firing on its cadence from the new time. Acknowledging-into-a-permanent-`ackd` state is gone; once a task is no longer needed, the only exit is `drop`.
 
 ### `nt drop <ref>`
 
@@ -69,6 +65,8 @@ Removes the referenced task. Output:
 ```
 dropped 'Task x' [a3f2]
 ```
+
+`drop` is the only completion verb and the only way a task leaves the system. There is no auto-cleanup, ever; this is now enforced by construction — nothing can accumulate, because there is no state in which a task lingers without a future fire.
 
 ### `nt --help` / `nt -h`
 
@@ -83,7 +81,7 @@ Prints usage to stdout, exit 0. Standard for `--version` / `-V` as well.
 
 ## Reference resolution (`<ref>`)
 
-Commands that take a `<ref>` (`ack`, `drop`) resolve it in this order:
+Commands that take a `<ref>` (`defer`, `drop`) resolve it in this order:
 
 1. **Hex ID match.** If the ref matches `^[a-f0-9]{4}$`, look it up by task ID. If no task has that ID: exit 1 with stdout empty, stderr `error: no task with id '<ref>'`.
 2. **Exact substring match against titles.** If exactly one task's title contains the ref as a substring (case-sensitive): act on that task.
@@ -92,7 +90,7 @@ Commands that take a `<ref>` (`ack`, `drop`) resolve it in this order:
 
 ### No-argument behavior
 
-`nt ack` and `nt drop` with no ref argument:
+`nt defer` and `nt drop` with no ref argument:
 
 - In a TTY: open the fuzzy menu with the full task list (ranked in canonical `nt ls` order). User selects, presses enter to apply.
 - In a non-TTY: print usage to stderr, exit 2.
@@ -104,7 +102,7 @@ No silent no-ops. POSIX convention: missing required argument = usage error, exi
 Rendered inline below the command prompt. Behavior:
 
 - Fuzzy-match the typed prefix (and continued typing) against task titles.
-- Show all matches ranked by the canonical `nt ls` order (overdue oldest-first, then pending soonest-first, then ackd most-recent-first).
+- Show all matches ranked by the canonical `nt ls` order (soonest `next_fire_at` first).
 - Top match highlighted. Other matches shown faint.
 - Tab: list the full candidate set (no filtering by typed prefix).
 - First Enter: apply to the highlighted top match. One-line confirmation printed (`dropped 'Task x' [a3f2]`). No "are you sure?" prompt.
@@ -162,59 +160,49 @@ Parse errors (malformed time syntax, etc.) also exit 2 with a `error: ...` messa
 
 ## Output format — `nt ls`
 
-### Section layout
+### List layout
+
+A single continuous list, sorted by `next_fire_at` ascending (soonest-fire first). No section headers, no state-derived zones, no `[STALE]` markers.
 
 ```
-OVERDUE
-  a3f2  Task waiting on PR review from Sara   fired 47m ago
-  b7e8  Check the deployment log              fired 12m ago
-
-PENDING
-  c1d9  Standup sync                          in 8m (14:30)
-  d4e7  Reply to Mike                          in 1h
-  f2a5  Follow up on deploy                   tomorrow 09:00
-
-ACKED, NOT DONE
-  e9b3  Re-deploy after merge                 acked 15m ago
+  a3f2  Standup sync                          in 8m (14:30)
+  b7e8  Reply to Mike                          in 1h
+  c1d9  Follow up on deploy                   tomorrow 09:00
+  d4e7  Re-deploy after merge                 10 Apr 10:55
 ```
+
+If the list is empty, print exactly `no active tasks.` (no header, no whitespace).
 
 ### Column rules
 
-- ID left-aligned to width 4, two spaces separator, then title, then status.
-- Within a section, the title column is aligned to the longest title in that section (so the status column lines up). Across sections, alignment is independent (each section re-aligns).
-- Section headers are uppercase, no leading whitespace. Tasks are indented two spaces relative to the header.
+- Two-space indent, then ID left-aligned to width 4, two spaces separator, then title, then status.
+- The title column is aligned to the longest title in the whole list (one list, not per-section), so the status column lines up.
+- If the list is empty, nothing else is printed beyond `no active tasks.`.
 
 ### Status string rules
 
-Status strings depend on state:
+Every task's status is forward-looking, derived from `next_fire_at` versus the CLI-provided `now`:
 
-| State | Status format |
+| Condition | Status format |
 |---|---|
-| `pending` (next fire < 24h away) | `in Nh` or `in Nm` (rounded down to the largest unit that fits) |
-| `pending` (next fire >= 24h away) | `tomorrow HH:MM` (if tomorrow) or `D Mon HH:MM` (if further) |
-| `overdue` (one-shot) | `fired Nh ago` or `fired Nm ago` (relative only; absolute is not useful here) |
-| `overdue` (repeating, nag pending) | `fired Nh ago, next in Nm` |
-| `ackd` (one-shot) | `acked Nh ago` |
-| `ackd` (repeating, next reminder pending) | `acked Nh ago, next in Nm` |
+| `next_fire_at` < 60s from `now` | `in Ns` |
+| `next_fire_at` < 60m from `now` | `in Nm` |
+| `next_fire_at` < 24h from `now` | `in Nh` |
+| `next_fire_at` is tomorrow | `tomorrow HH:MM` (HH:MM in local time) |
+| `next_fire_at` further than tomorrow | `D Mon HH:MM` (local time) |
 
-### Stale marker
-
-A task whose state is `overdue` and whose `last_fired_at` is older than the staleness threshold (default: 24 hours) gets a `[STALE]` marker prepended to its status:
-
-```
-  a3f2  Old forgotten thing [STALE]   fired 2d ago
-```
-
-The threshold is fixed at 24h for v1; configurability is deferred.
+There is no `fired Xh ago` form, no `acked Nh ago` form, no `next in Nm` form, and no `[STALE]` marker. Forward-looking only.
 
 ### Relative-time formatting
 
-- < 60s: `in Ns` / `Ns ago` (rare; mostly for very short test intervals)
-- < 60m: `in Nm` / `Nm ago`
-- < 24h: `in Nh` / `Nh ago`
+- < 60s: `in Ns`
+- < 60m: `in Nm`
+- < 24h: `in Nh`
 - >= 24h: absolute form (`tomorrow HH:MM`, `D Mon HH:MM`)
 
 Numbers are always integers, rounded down. No decimals anywhere in `nt` output.
+
+If `next_fire_at <= now` (daemon was down and missed a fire): the coordinator is the daemon's startup recovery rule, which fires-and-advances immediately; by the time the CLI runs `nt ls`, such tasks have already been rescheduled into the future. The CLI therefore never needs to render a "past fire" status, and assumes `next_fire_at > now` when rendering.
 
 ## Daemon lifecycle from the CLI's perspective
 
@@ -239,7 +227,7 @@ These flags are reserved for future use and must not be repurposed in v1:
 - `--json` (machine-readable output for `nt ls`)
 - `--yes` / `-y` (no longer needed in current design; reserved against future reintroduction)
 - `--verbose` / `-v`
-- `--config <path>` (alternate config file)
+- `--config <path>` (alternate config file; the future surface for the configurable default cadence)
 - `--non-interactive` / `-n` (force non-TTY resolution path even in a TTY)
 
 If encountered in v1, these must produce exit 2 with `error: --json is not yet supported` (or equivalent), not silent acceptance.
