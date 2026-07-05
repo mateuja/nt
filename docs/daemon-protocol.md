@@ -82,7 +82,7 @@ Request:
   "type": "add",
   "title": "Task x",
   "next_fire_at": "2026-07-04T18:33:12Z",
-  "repeat_interval_secs": null,
+  "cadence_secs": 3600,
   "created_at": "2026-07-04T18:03:12Z"
 }
 ```
@@ -90,7 +90,7 @@ Request:
 Fields:
 - `title` (string, required, non-empty after trim).
 - `next_fire_at` (ISO 8601 UTC string, required). Must be in the future; if not, the daemon returns a `past_time` error. (The CLI pre-validates, but the daemon re-validates.)
-- `repeat_interval_secs` (integer >= 1, or `null`). `null` means the `once` policy.
+- `cadence_secs` (integer `>= 1`, required). The re-arm interval in seconds. The CLI sends the user-supplied `every <interval>` value, or the default cadence (3600 for v1) if the user omitted `every`. There is no `once` policy; every task has a cadence.
 - `created_at` (ISO 8601 UTC string, required). Set by the CLI to the current time; the daemon does not override it. (Sending the timestamp from the CLI keeps the daemon stateless about wall-clock time beyond what it needs for scheduling.)
 
 Response (success):
@@ -100,17 +100,23 @@ Response (success):
 
 The daemon assigns the `id` (4-char hex, collision-checked against active tasks).
 
-### `ack`
+### `defer`
 
-Acknowledge a task by reference. The daemon resolves the ref against its in-memory task list (the single source of truth); the CLI does not perform ref resolution.
+Reschedule a task by reference: set its `next_fire_at`, and optionally replace its cadence. The daemon resolves the ref against its in-memory task list (the single source of truth); the CLI does not perform ref resolution.
 
 Request:
 ```json
-{ "type": "ack", "ref": "a3f2" }
+{
+  "type": "defer",
+  "ref": "a3f2",
+  "next_fire_at": "2026-07-04T19:00:00Z"
+}
 ```
 
 Fields:
 - `ref` (string, required). Either a 4-char hex ID or a substring to match against titles.
+- `next_fire_at` (ISO 8601 UTC string, required). Must be in the future; if not, the daemon returns a `past_time` error.
+- `cadence_secs` (integer `>= 1`, optional). If present, replaces the task's `cadence_secs`. If absent, the existing cadence is preserved.
 
 Resolution rules (executed by the daemon):
 1. If `ref` matches `^[a-f0-9]{4}$`: look up by ID. If no match: `not_found` error.
@@ -118,10 +124,10 @@ Resolution rules (executed by the daemon):
 
 Response (success):
 ```json
-{ "ok": true, "task": { /* full task object */ } }
+{ "ok": true, "task": { /* full task object, post-defer */ } }
 ```
 
-The response includes the full task object (post-ack state) so the CLI can render the confirmation line without a separate round-trip.
+The response includes the full task object so the CLI can render the confirmation line without a separate round-trip.
 
 Response (ambiguous):
 ```json
@@ -130,17 +136,17 @@ Response (ambiguous):
   "code": "ambiguous",
   "error": "multiple tasks match 'pr':",
   "matches": [
-    { "id": "a3f2", "title": "PR review from Sara", "state": "overdue" },
-    { "id": "b7e8", "title": "Reply to Mike on PR", "state": "pending" }
+    { "id": "a3f2", "title": "PR review from Sara" },
+    { "id": "b7e8", "title": "Reply to Mike on PR" }
   ]
 }
 ```
 
-In a TTY, the CLI renders the fuzzy menu from `matches` and re-sends an `ack` request with the chosen hex ID. In a non-TTY, the CLI prints the error and exits 1.
+In a TTY, the CLI renders the fuzzy menu from `matches` and re-sends a `defer` request with the chosen hex ID. In a non-TTY, the CLI prints the error and exits 1.
 
 ### `drop`
 
-Remove a task. Same request/response shape as `ack`.
+Remove a task. Same request/response shape as `defer` (without the `next_fire_at` / `cadence_secs` fields).
 
 Request:
 ```json
@@ -154,65 +160,45 @@ Response (success):
 
 ### `list`
 
-Request a filtered list of tasks. Used by `nt ls`.
+Request the active task list. Used by `nt ls`.
 
 Request:
 ```json
 {
   "type": "list",
-  "filters": ["overdue", "pending", "ackd"],
   "now": "2026-07-04T18:03:12Z"
 }
 ```
 
 Fields:
-- `filters` (array of strings, optional; default = all three). Allowed values: `"overdue"`, `"pending"`, `"ackd"`. Unknown values: `usage` error.
-- `now` (ISO 8601 UTC string, required). The CLI sends its current wall-clock time; the daemon uses this to compute relative-time status strings (`"fired 47m ago"`, etc.) and to determine staleness. Rationale: keeps the daemon stateless about display time, and lets the CLI render consistently across any clock skew.
+- `now` (ISO 8601 UTC string, required). The CLI sends its current wall-clock time; the daemon uses this to compute relative-time status strings (`"in 30m"`, etc.). Rationale: keeps the daemon stateless about display time, and lets the CLI render consistently across any clock skew.
+
+There is no `filters` field. There are no states to filter on.
 
 Response (success):
 ```json
 {
   "ok": true,
-  "sections": [
-    {
-      "name": "OVERDUE",
-      "tasks": [ /* full task objects with computed `status` and `stale` fields */ ]
-    },
-    {
-      "name": "PENDING",
-      "tasks": [ ... ]
-    },
-    {
-      "name": "ACKED, NOT DONE",
-      "tasks": [ ... ]
-    }
-  ]
+  "tasks": [ /* full task objects with a computed `status` field */ ]
 }
 ```
 
-Each task object in the response is augmented with two additional display-only fields that the daemon computes:
+Each task object in the response is augmented with one display-only field that the daemon computes from `next_fire_at` versus the request's `now`:
 
 ```json
 {
   "id": "a3f2",
   "title": "...",
   "created_at": "...",
-  "state": "overdue",
   "next_fire_at": "...",
-  "last_fired_at": "...",
-  "ackd_at": null,
-  "repeat_interval_secs": null,
-  "status": "fired 47m ago",
-  "stale": false
+  "cadence_secs": 3600,
+  "status": "in 30m"
 }
 ```
 
-Tasks are pre-sorted by the daemon in the canonical order for each section:
-- OVERDUE: by `last_fired_at` ascending.
-- PENDING: by `next_fire_at` ascending.
-- ACKED: by `ackd_at` descending.
+There is no `state`, `last_fired_at`, `ackd_at`, or `stale` field. The status string is forward-looking only (`in Ns` / `in Nm` / `in Nh` / `tomorrow HH:MM` / `D Mon HH:MM`); there is no `fired Xh ago` or `acked Xh ago` form.
 
-Empty sections are included in the response with an empty `tasks` array; the CLI decides whether to print them (per the CLI contract, empty sections are omitted from output).
+Tasks are pre-sorted by the daemon: by `next_fire_at` ascending. The CLI renders the array verbatim; no sectioning, no re-sort, no per-status grouping.
 
 ### `shutdown`
 
@@ -247,8 +233,8 @@ The daemon deletes the socket file on exit.
 ### Runtime
 
 - The daemon is the only writer to `tasks.json`. Concurrent CLI requests are serialized by the daemon's accept loop; no file locking is required.
-- On any state change (fire, ack, drop, add), the daemon writes `tasks.json` atomically (temp file + rename) *after* updating its in-memory state, before sending the response. This ensures the file always reflects a consistent state.
-- The daemon holds in-memory timers (one per task that has a future `next_fire_at` and is not `ackd` for one-shot tasks). When a timer fires, the daemon sends the OS notification and updates the task's state and fields in memory and on disk.
+- On any state change (fire, defer, drop, add), the daemon writes `tasks.json` atomically (temp file + rename) *after* updating its in-memory state, before sending the response. This ensures the file always reflects a consistent state.
+- The daemon holds one in-memory timer per task (every task has a future `next_fire_at` after the daemon re-arms it). When a timer fires, the daemon sends the OS notification, advances `next_fire_at` to `now + cadence_secs`, and writes the file.
 
 ### Notification delivery
 
@@ -267,10 +253,10 @@ The daemon deletes the socket file on exit.
 
 When the daemon starts and reads `tasks.json`, for each task:
 
-- If `state == "pending"` and `next_fire_at <= now`: the alarm was due while the daemon was down. Fire it immediately (send notification), transition to `overdue`, set `last_fired_at = now`. Apply the repeating-task re-arm rule if applicable.
-- If `state == "pending"` and `next_fire_at > now`: schedule an in-memory timer.
-- If `state == "overdue"`: no immediate action. If `repeat_interval_secs != null`, schedule the next nag timer at `next_fire_at` (which is in the future for repeating tasks).
-- If `state == "ackd"`: no immediate action. If `repeat_interval_secs != null`, schedule the next reminder timer at `next_fire_at`.
+- If `next_fire_at <= now`: the alarm was due while the daemon was down. Fire it immediately (send notification), then advance `next_fire_at` to `now + cadence_secs`. No stored state changes other than `next_fire_at`; there is no state field to update.
+- If `next_fire_at > now`: schedule an in-memory timer at `next_fire_at`.
+
+There are no per-state branches. Every task, on every fire (whether from a live timer or from recovery), advances its `next_fire_at` by `cadence_secs`.
 
 ### Crash recovery
 
@@ -297,11 +283,11 @@ When the daemon starts and reads `tasks.json`, for each task:
 
 ## Examples (full round-trips)
 
-### Create a one-shot task
+### Create a task
 
 CLI → daemon:
 ```json
-{"type":"add","title":"Task x","next_fire_at":"2026-07-04T18:33:12Z","repeat_interval_secs":null,"created_at":"2026-07-04T18:03:12Z"}
+{"type":"add","title":"Task x","next_fire_at":"2026-07-04T18:33:12Z","cadence_secs":3600,"created_at":"2026-07-04T18:03:12Z"}
 ```
 
 Daemon → CLI:
@@ -309,28 +295,28 @@ Daemon → CLI:
 {"ok":true,"id":"a3f2"}
 ```
 
-### List with no filters (default)
+### List tasks
 
 CLI → daemon:
 ```json
-{"type":"list","filters":["overdue","pending","ackd"],"now":"2026-07-04T18:03:12Z"}
+{"type":"list","now":"2026-07-04T18:03:12Z"}
 ```
 
 Daemon → CLI (abbreviated):
 ```json
-{"ok":true,"sections":[{"name":"OVERDUE","tasks":[{"id":"a3f2","title":"Task x","state":"overdue","next_fire_at":"2026-07-04T18:33:12Z","last_fired_at":"2026-07-04T18:33:12Z","ackd_at":null,"repeat_interval_secs":null,"status":"fired 30m ago","stale":false}]},{"name":"PENDING","tasks":[]},{"name":"ACKED, NOT DONE","tasks":[]}]}
+{"ok":true,"tasks":[{"id":"a3f2","title":"Task x","created_at":"2026-07-04T18:03:12Z","next_fire_at":"2026-07-04T18:33:12Z","cadence_secs":3600,"status":"in 29m"}]}
 ```
 
-### Ambiguous ack in a non-TTY
+### Ambiguous defer in a non-TTY
 
 CLI → daemon:
 ```json
-{"type":"ack","ref":"pr"}
+{"type":"defer","ref":"pr","next_fire_at":"2026-07-04T19:00:00Z"}
 ```
 
 Daemon → CLI:
 ```json
-{"ok":false,"code":"ambiguous","error":"multiple tasks match 'pr':","matches":[{"id":"a3f2","title":"PR review from Sara","state":"overdue"},{"id":"b7e8","title":"Reply to Mike on PR","state":"pending"}]}
+{"ok":false,"code":"ambiguous","error":"multiple tasks match 'pr':","matches":[{"id":"a3f2","title":"PR review from Sara"},{"id":"b7e8","title":"Reply to Mike on PR"}]}
 ```
 
-The CLI (in non-TTY mode) prints the error to stderr and exits 1. In a TTY, the CLI renders the fuzzy menu from `matches` and sends a follow-up `ack` request with the selected hex ID.
+The CLI (in non-TTY mode) prints the error to stderr and exits 1. In a TTY, the CLI renders the fuzzy menu from `matches` and sends a follow-up `defer` request with the selected hex ID.

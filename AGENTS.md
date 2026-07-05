@@ -68,11 +68,11 @@ golangci-lint run --config=go/.golangci.yml .   # Go lint (run from go/, or `cd 
 
 ## Hard constraints from the contracts
 
-- **Exit codes:** `0` success, `1` runtime error, `2` usage error (POSIX). Missing required arg for `ack`/`drop` → exit 2, never a silent no-op.
+- **Exit codes:** `0` success, `1` runtime error, `2` usage error (POSIX). Missing required arg for `defer`/`drop` → exit 2, never a silent no-op.
 - **Times:** stored/transmitted as ISO 8601 **UTC** with `Z`. The CLI does all local→UTC and UTC→local conversion; the daemon is stateless about wall-clock display time (the CLI sends `now` in `list` requests).
 - **Storage:** `~/.config/nt/tasks.json` (or `$XDG_CONFIG_HOME/nt/`), permissions `0600`, atomic writes (temp file + `rename`, never in place). The daemon is the **only** writer; concurrent CLI requests are serialized by the daemon's accept loop, so no file locking.
 - **Task IDs:** 4 lowercase hex chars (`^[a-f0-9]{4}$`), collision-checked at creation (re-draw on collision), stable forever, not reused after drop.
-- **State:** `pending` | `overdue` | `ackd`. Stored explicitly, not derived.
+- **No stored state.** A task has only `next_fire_at` and `cadence_secs` (plus `id`, `title`, `created_at`). Sort position in `nt ls` is derived from `next_fire_at` versus the CLI-provided `now`; there is no `pending`/`overdue`/`ackd` enum. Every task re-arms on every fire; there is no `once` policy and no `ackd` lingering state.
 - **No history.** `drop` removes the task outright — no tombstone, no logs.
 - **Ref resolution order:** (1) exact 4-hex-ID match → lookup, error `not_found` if missing; (2) case-sensitive substring match against titles → one match acts, multiple → TTY fuzzy menu / non-TTY `ambiguous` error, zero → `not_found`.
 - **Time syntax** is fixed and narrow: `30m`/`2h`/`1d` intervals, `HH:MM` (24h), `D Mon HH:MM`, `tomorrow HH:MM`, `weekday HH:MM`, `next weekday HH:MM`. No am/pm, no bare weekday/tomorrow, no combined intervals (`1h30m`), no natural language. Past absolute times exit 1 (no rollover).
@@ -82,5 +82,5 @@ golangci-lint run --config=go/.golangci.yml .   # Go lint (run from go/, or `cd 
 ## Gotchas
 
 - The daemon re-arms all timers from `tasks.json` on startup (recovery after downtime/crash). In-memory state is reconstructable from the file — never assume a separate daemon-state file.
-- `ack` of a repeating task re-arms the next reminder `repeat_interval_secs` from now; the confirmation line does **not** mention this separately.
-- Empty `nt ls` sections are **omitted entirely** (no header printed). If all sections empty, print exactly `no active tasks.`.
+- `defer` reschedules `next_fire_at` (and optionally replaces `cadence_secs`); it is the only way to silence a fired alarm short of `drop`. The confirmation line does **not** separately mention the cadence.
+- `nt ls` is a single continuous list sorted by `next_fire_at` ascending. If the list is empty, print exactly `no active tasks.` — no header, no whitespace.

@@ -34,11 +34,8 @@ This document is the binding spec for both the Python (v1) and Go (future) imple
   "id": "a3f2",
   "title": "Task x",
   "created_at": "2026-07-04T18:03:12Z",
-  "state": "pending",
   "next_fire_at": "2026-07-04T18:33:12Z",
-  "last_fired_at": null,
-  "ackd_at": null,
-  "repeat_interval_secs": null
+  "cadence_secs": 3600
 }
 ```
 
@@ -49,53 +46,37 @@ This document is the binding spec for both the Python (v1) and Go (future) imple
 | `id` | string | yes | 4 hex chars, lowercase (`^[a-f0-9]{4}$`). Collision-checked against active tasks at creation; re-draw on collision. Stable forever; not reused after drop (no history). |
 | `title` | string | yes | The user-provided message text. Stored verbatim (including whitespace and punctuation). |
 | `created_at` | string | yes | ISO 8601 UTC, seconds precision (`YYYY-MM-DDTHH:MM:SSZ`). Set once at creation. |
-| `state` | string | yes | One of `"pending"`, `"overdue"`, `"ackd"`. Explicitly stored, not derived (see State transitions below). |
-| `next_fire_at` | string | yes | ISO 8601 UTC. The next absolute time the daemon should fire the alarm. May be in the past (for one-shot tasks that already fired once and are now `overdue` or `ackd`); the meaning depends on `state`. |
-| `last_fired_at` | string \| null | yes | ISO 8601 UTC or `null`. The last time the daemon fired the alarm. Used to render "fired 47m ago" in the CLI listing. |
-| `ackd_at` | string \| null | yes | ISO 8601 UTC or `null`. Set when the user runs `nt ack`. |
-| `repeat_interval_secs` | integer \| null | yes | `null` for the `once` policy; otherwise the repeat interval in seconds (e.g. `600` for `10m`). The daemon uses this to re-arm after fire and after ack. |
+| `next_fire_at` | string | yes | ISO 8601 UTC. The next absolute time the daemon should fire the alarm. Always advances to the future after the daemon re-arms (`next_fire_at = now + cadence_secs`); may transiently be in the past during daemon downtime, in which case the daemon fires-and-advances on startup. |
+| `cadence_secs` | integer | yes | The re-arm interval in seconds (e.g. `3600` for `1h`). Must be an integer `>= 1`. Required, non-null. Every task re-arms on every fire; there is no `once` policy. |
 
-### State values
+There is no stored `state` field. Sort position in `nt ls` is derived from `next_fire_at` versus the CLI-provided `now`; there is nothing else to persist.
 
-| State | Meaning |
-|---|---|
-| `pending` | Alarm has not yet fired in the current cycle. `next_fire_at` is in the future. |
-| `overdue` | Alarm fired at least once and the user has not acked it. For one-shot tasks, `next_fire_at` is in the past (the time it fired). For repeating tasks, `next_fire_at` is in the future (the next nag). |
-| `ackd` | User silenced the alarm via `nt ack`. For one-shot tasks, no future fires. For repeating tasks, `next_fire_at` is `ackd_at + repeat_interval_secs` (the next reminder from ack time). |
+## Transitions
 
-## State transitions
-
-All transitions are driven by the daemon (which is the only writer to this file):
+All transitions are driven by the daemon (the only writer to this file):
 
 ### Create (CLI sends an `add` request)
 
 New task object:
-- `state`: `"pending"`
 - `created_at`: now
 - `next_fire_at`: the time the user specified, converted to UTC
-- `last_fired_at`: `null`
-- `ackd_at`: `null`
-- `repeat_interval_secs`: `null` for `once`, or the parsed interval in seconds
+- `cadence_secs`: the parsed interval in seconds, or the default cadence (3600) if the user omitted `every`
 
-### Fire (daemon's in-memory timer expires)
+### Fire (daemon's in-memory timer expires, or recovery for past `next_fire_at` on startup)
 
-- `state`: → `"overdue"`
-- `last_fired_at`: now
-- If `repeat_interval_secs == null`: `next_fire_at` is unchanged (it's in the past; signals "done firing").
-- If `repeat_interval_secs != null`: `next_fire_at` = now + `repeat_interval_secs` (schedules the next nag; state stays `"overdue"` until acked).
+- Fire the OS notification.
+- `next_fire_at`: `now + cadence_secs` (schedule the next nag).
 
-### Ack (CLI sends an `ack` request)
+That is the whole rule. There are no per-state branches and no once-vs-repeating fork: every task re-arms on every fire.
 
-- `state`: → `"ackd"`
-- `ackd_at`: now
-- If `repeat_interval_secs != null`: `next_fire_at` = now + `repeat_interval_secs` (next reminder from ack time).
-- If `repeat_interval_secs == null`: `next_fire_at` is unchanged (no future fires).
+### Defer (CLI sends a `defer` request)
 
-The acked task remains in the file until the user runs `nt drop`. There is no auto-expiration.
+- `next_fire_at`: the new time the user specified, converted to UTC.
+- If the request includes `cadence_secs`: replace the task's `cadence_secs` with it. Otherwise leave `cadence_secs` unchanged.
 
 ### Drop (CLI sends a `drop` request)
 
-The task object is removed from the `tasks` array. No tombstone, no history.
+The task object is removed from the `tasks` array. No tombstone, no history. `drop` is the only exit; there is no auto-expiration, ever.
 
 ## Daemon metadata
 
@@ -108,15 +89,19 @@ CLI uses `pid` for stale-pid detection: if the file says a daemon is running but
 
 ## Migration and recovery rules
 
-- On startup, the daemon reads `tasks.json` and re-arms in-memory timers for any task whose `state` is `pending` and `next_fire_at` is in the future.
-- For any task whose `state` is `pending` but `next_fire_at` is in the past (alarm due while daemon was down): the daemon fires the alarm immediately and transitions to `overdue` as if the timer had just expired.
-- For any task whose `state` is `overdue` (alarm already fired, never acked): the daemon re-arms the next nag timer if `repeat_interval_secs != null`, otherwise does nothing (the one-shot already fired).
-- For any task whose `state` is `ackd`: the daemon re-arms the next reminder timer if `repeat_interval_secs != null`, otherwise does nothing.
+- On startup, the daemon reads `tasks.json` and re-arms in-memory timers for every task whose `next_fire_at` is in the future.
+- For any task whose `next_fire_at` is in the past (alarm due while the daemon was down): the daemon fires the alarm immediately and advances `next_fire_at` to `now + cadence_secs`.
+
+There are no per-state branches. The daemon is stateless about anything other than `next_fire_at` and `cadence_secs`.
 
 ## Unused or future fields
 
 The following are reserved for future use and must not appear in v1:
 
+- `state` (one of `"pending"`, `"overdue"`, `"ackd"`)
+- `last_fired_at` (ISO 8601 UTC)
+- `ackd_at` (ISO 8601 UTC)
+- `repeat_interval_secs` (the v1-pre-revision name for `cadence_secs`)
 - `notes` (free-form text)
 - `tags` (array of strings)
 - `priority` (integer)
